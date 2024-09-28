@@ -1,0 +1,176 @@
+---
+title: "merged_pocessing"
+author: "Chen, yu-jie"
+date: "2024-09-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#檔案位子
+setwd("C:/Users/spes1/OneDrive/桌面")
+getwd()
+```
+
+```{r}
+library(dplyr)
+
+clean_and_process_data <- function(data) {
+ 
+#MMSI不足9碼的data
+clean_data <- clean_data[nchar(clean_data$MMSI) == 9, ]
+
+#研究範圍外的data
+clean_data <- clean_data[!(clean_data$Longitude > 123 | clean_data$Longitude < 117 |
+                                   clean_data$Latitude > 27 | clean_data$Latitude < 20), ]
+
+#航速異常
+clean_data <- clean_data[!(clean_data$SOG > 30), ]
+
+#航向異常
+clean_data <- clean_data[!(clean_data$COG > 359.9), ]
+
+# 將時間chr轉換
+clean_data$Record_Time <- as.POSIXct(clean_data$Record_Time, format = "%Y-%m-%d %H:%M:%S")
+
+
+# 删除重複數據
+clean_data <- clean_data[order(clean_data$Record_Time), ]
+clean_data <- clean_data[!duplicated(clean_data[, c("MMSI", "Longitude", "Latitude","COG","SOG")]), ]
+clean_data <- clean_data[!duplicated(clean_data[, c("MMSI", "Record_Time")]), ]
+
+#按MMSI分組
+data_grouped <- split(clean_data, clean_data$MMSI)
+#每組(每艘船)按照時間順序排列
+for (i in seq_along(data_grouped)) {
+  group <- data_grouped[[i]]
+  data_grouped[[i]] <- group[order(group$Record_Time), ]
+}
+
+group_num <- length(data_grouped) #船隻數
+clean <- data.frame()
+
+#判斷航向是否異常(大圓距離公式)
+i <- 1
+while (i <= group_num) {
+  group <- data_grouped[[i]]
+  clean <- rbind(clean, group[1, ])  #放第一筆資料進去
+  j <- 1
+  while (j < nrow(group)) {
+    p1 <- group[j, ]
+    p2 <- group[j + 1, ]
+    o1 <- p1$Longitude
+    a1 <- p1$Latitude
+    o2 <- p2$Longitude
+    a2 <- p2$Latitude
+    delta_o <- abs(o2 - o1)
+    delta_a <- abs(a2 - a1)
+
+    d <- 2 * r * asin(sqrt(sin(delta_a/2)^2 + cos(a1) * cos(a2) * sin(delta_o/2)^2))
+    Si <- max(p1$SOG, p2$SOG, na.rm = TRUE)
+    Tn <- abs(difftime(p2$Record_Time, p1$Record_Time, units = "secs"))
+
+    if (((Si * Tn * 0.5144 + 1) * 1.2 > d) && (d > (Si * Tn * 0.5144 + 1) * 0.9)) {
+      clean <- rbind(clean, p2)
+      j <- j + 1
+    } else {
+      group <- group[-(j + 1), ]
+      data_grouped[[i]] <- group
+    }
+  }
+  i <- i+1
+}
+  
+#資料壓縮
+data_compress <- data.frame()
+
+# 設定閾值
+Dt <- 84  
+Ct <- 9  
+
+i <- 1
+# 循環處理每組MMSI
+while (i <= group_num) {
+  group <- data_grouped[[i]]
+  data_compress <- rbind(data_compress, group[1, ])
+  j <- 1
+  while (j <= nrow(group) - 2) {
+    p1 <- group[j, ]
+    p2 <- group[j + 1, ]
+    p3 <- group[j + 2, ]
+   
+    data_compress <- rbind(data_compress, p1)
+    
+    # 計算兩點距離
+    o1 <- p1$Longitude
+    a1 <- p1$Latitude
+    o2 <- p2$Longitude
+    a2 <- p2$Latitude
+    o3 <- p3$Longitude
+    a3 <- p3$Latitude
+    delta_o1 <- abs(o2 - o1)
+    delta_a1 <- abs(a2 - a1)
+    delta_o3 <- abs(o3 - o2)
+    delta_a3 <- abs(a3 - a2)
+    d1 <- 2 * r * asin(sqrt(sin(delta_a1/2)^2 + cos(a1) * cos(a2) * sin(delta_o1/2)^2))
+    d3 <- 2 * r * asin(sqrt(sin(delta_a3/2)^2 + cos(a3) * cos(a2) * sin(delta_o3/2)^2))
+    
+    # 計算兩點航向差
+    Cs <- abs(p2$COG-p1$COG)
+    
+    if (d1 > Dt || d3 > Dt || Cs > Ct) {
+      data_compress <- rbind(data_compress, p2)
+      if(j == nrow(group)-2){
+        data_compress <- rbind(data_compress, p2)
+        data_compress <- rbind(data_compress, p3)
+      }
+      j <- j + 1
+    } else {
+      group <- group[-(j + 1), ]
+      data_grouped[[i]] <- group
+      if(j == nrow(group)-2){
+        data_compress <- rbind(data_compress, p2)
+        data_compress <- rbind(data_compress, p3)
+      }
+     
+    }
+    
+  }
+  i <- i+1
+}
+
+
+  return(data)
+}
+```
+```{r}
+#放一堆AIS dataset的資料夾位子
+folder_path <- "C:/Users/spes1/OneDrive/桌面/Split" 
+file_list <- list.files(path = folder_path, pattern = "\\.csv$", full.names = TRUE)
+
+combined_data <- data.frame()
+
+
+for (file in file_list) {
+
+
+
+  data <- read.csv(file, header = FALSE)
+   
+  #切割資料沒有列名，補上列名
+  column_names <- c("RX_MMSI", "IMO_Number", "Call_Sign", "ShipName", "MMSI", "Navigational_Status" , "ROT", "SOG", "Position_Accuracy", "Longitude", "Latitude", "COG","True_Heading","Time_Stamp", "Ship_and_Cargo_Type", "Reference_Position_A", "Reference_Position_B", "Reference_Position_C", "Reference_Position_D", "Fixing_Device", "ETA", "MAX_Draught", "Destination", "DTE", "Record_Time")
+  names(data) <- column_names
+  data <- data[, c("MMSI","Destination","IMO_Number", "ShipName","COG","Ship_and_Cargo_Type", "SOG", "Longitude", "Latitude", "Record_Time")]
+  
+  cleaned_data <- clean_and_process_data(data)
+  combined_data <- rbind(combined_data, cleaned_data) 
+}
+```
+```{r}
+#輸出檔案的位子
+output_file_path <- "C:/Users/spes1/OneDrive/桌面/combined_data.csv"  
+write.csv(combined_data, file = output_file_path, row.names = FALSE)
+````
