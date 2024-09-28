@@ -1,0 +1,54 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+def douglas_peucker(points, threshold):
+    dmax = 0
+    index = 0
+    end = len(points)
+    for i in range(1, end - 1):
+        d = perpendicular_distance(points[i], points[0], points[-1])
+        if d > dmax:
+            index = i
+            dmax = d
+
+    if dmax > threshold:
+        rec_results1 = douglas_peucker(points[:index + 1], threshold)
+        rec_results2 = douglas_peucker(points[index:], threshold)
+        result = rec_results1[:-1] + rec_results2
+    else:
+        result = [points[0], points[-1]]
+
+    return result
+
+def perpendicular_distance(point, line_start, line_end):
+    if line_start == line_end:
+        return np.linalg.norm(np.array(point) - np.array(line_start))
+    else:
+        n = np.abs((line_end[1] - line_start[1]) * point[0] - (line_end[0] - line_start[0]) * point[1] + line_end[0] * line_start[1] - line_end[1] * line_start[0])
+        d = np.linalg.norm(np.array(line_end) - np.array(line_start))
+        return n / d
+
+# 加載AIS數據
+ais_data = pd.read_csv('ais_data.csv')
+
+# 設定距離閾值
+threshold = 0.01  # 根據需要調整
+
+# 按MMSI分組並應用DP算法
+compressed_trajectories = []
+for mmsi, group in ais_data.groupby('MMSI'):
+    trajectory_points = list(zip(group['Longitude'], group['Latitude']))
+    compressed_trajectory = douglas_peucker(trajectory_points, threshold)
+    compressed_trajectories.append(pd.DataFrame(compressed_trajectory, columns=['Longitude', 'Latitude']))
+
+# 可視化壓縮前後的軌跡（示例）
+plt.figure(figsize=(10, 6))
+for mmsi, group in ais_data.groupby('MMSI'):
+    plt.plot(group['Longitude'], group['Latitude'], label=f'Original Trajectory {mmsi}')
+for i, compressed_df in enumerate(compressed_trajectories):
+    plt.plot(compressed_df['Longitude'], compressed_df['Latitude'], label=f'Compressed Trajectory {i}', linestyle='--')
+plt.xlabel('Longitude')
+plt.ylabel('Latitude')
+plt.legend()
+plt.show()
